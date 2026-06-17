@@ -3,7 +3,7 @@ import os
 import json
 from dotenv import load_dotenv
 from groq import Groq
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -15,7 +15,7 @@ client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 # 1. WEB SEARCH FUNCTIONS
 # ==========================================
 def web_search(query, max_results=3):
-    """Search the web using DuckDuckGo"""
+    """Search the web using DuckDuckGo (via ddgs)"""
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=max_results))
@@ -27,7 +27,7 @@ def web_search(query, max_results=3):
 def read_url(url):
     """Extract text content from a URL"""
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -67,7 +67,6 @@ Sub-questions:"""
         # Fallback: extract from response if JSON parsing fails
         content = response.choices[0].message.content
         try:
-            # Try to find a list in the response
             import re
             matches = re.findall(r'"([^"]*)"', content)
             return matches[:num_questions] if matches else ["What is " + topic, "Why is " + topic + " important?"]
@@ -127,7 +126,7 @@ Your Answer:"""
 # ==========================================
 # 3. MAIN AGENT FUNCTION
 # ==========================================
-def research_agent(question, top_results=3):
+def research_agent(question, top_results=2):  # Reduced to 2 to avoid timeouts
     """Main function - takes a question, searches, and synthesizes an answer"""
     print(f"\n🔍 Researching: {question}")
     print("-" * 50)
@@ -153,25 +152,46 @@ def research_agent(question, top_results=3):
         print(f"  📚 Found {len(results)} results, reading content...")
         
         for result in results:
-            url = result['href']
-            title = result['title']
-            snippet = result['body']
+            url = result.get('href', '')
+            title = result.get('title', 'No title')
+            snippet = result.get('body', 'No snippet')
             
+            if not url:
+                continue
+                
             # Read the full content
             content = read_url(url)
             if content and len(content) > 100:
                 summary = summarize_content(content, url, sq)
                 all_summaries.append((summary, url))
                 print(f"    ✅ Summarized: {title[:50]}...")
-            else:
+            elif snippet:
                 # Use the snippet if content can't be read
                 all_summaries.append((snippet, url))
                 print(f"    📄 Using snippet: {title[:50]}...")
+            else:
+                print(f"    ⚠️ No content available for: {title[:30]}...")
         
         # Rate limit to avoid being blocked
         time.sleep(1)
     
     # Step 3: Synthesize the final answer
+    if not all_summaries:
+        print("\n⚠️ No research results found. Generating answer from general knowledge...")
+        # Fallback: Use LLM's general knowledge
+        prompt = f"""Provide a comprehensive answer to the following question based on your general knowledge:
+        {question}"""
+        
+        response = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "You are a knowledgeable assistant. Provide a detailed, well-structured answer."},
+                {"role": "user", "content": prompt}
+            ],
+            model="llama-3.3-70b-versatile",
+            temperature=0.4
+        )
+        return response.choices[0].message.content, []
+    
     print("\n🔬 Synthesizing final answer...")
     final_answer = synthesize_answer(question, all_summaries)
     
@@ -198,14 +218,15 @@ def main():
         
         try:
             answer, sources = research_agent(question)
-            print("\n" + "=" * 50)
+            print("\n" + "=" * 60)
             print("📝 FINAL ANSWER:")
-            print("-" * 50)
+            print("-" * 60)
             print(answer)
-            print("\n📖 Sources:")
-            for i, (_, url) in enumerate(sources, 1):
-                print(f"  [{i}] {url}")
-            print("=" * 50)
+            if sources:
+                print("\n📖 Sources:")
+                for i, (_, url) in enumerate(sources, 1):
+                    print(f"  [{i}] {url}")
+            print("=" * 60)
         except Exception as e:
             print(f"❌ Error: {e}")
 
