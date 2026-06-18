@@ -1,5 +1,6 @@
-venv/ 
-__pycache__/ 
-*.pyc 
-history.json 
-.env 
+.env
+chroma_db/
+*.pyc
+__pycache__/
+chunk_metadata.json
+history.json
