@@ -4,6 +4,12 @@ import os
 import json
 from rag_system_enhanced import query_pdf_enhanced, collection, index_pdf_with_metadata
 
+# Check if running on Streamlit Cloud
+import sys
+if 'streamlit' in sys.modules:
+    # Running on Streamlit Cloud - use secrets
+    os.environ['GROQ_API_KEY'] = st.secrets["GROQ_API_KEY"]
+
 # Page configuration
 st.set_page_config(
     page_title="RAG Document Q&A",
