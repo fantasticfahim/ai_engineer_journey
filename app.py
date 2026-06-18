@@ -2,7 +2,7 @@
 import streamlit as st
 import os
 import json
-from rag_system_enhanced import query_pdf_enhanced, collection, index_pdf_with_metadata
+from rag_system_simple import query_pdf_simple, index_pdf_simple, chunks_with_metadata as collection, embeddings
 
 # Check if running on Streamlit Cloud
 import sys
@@ -77,7 +77,7 @@ with st.sidebar:
     st.markdown("---")
     if st.button("🔄 Re-index PDF"):
         with st.spinner("Re-indexing..."):
-            num_chunks = index_pdf_with_metadata("Words & Tokens.pdf")
+            num_chunks = index_pdf_simple("Words & Tokens.pdf")
             st.success(f"✅ Re-indexed {num_chunks} chunks!")
             st.rerun()
 
@@ -103,7 +103,7 @@ if st.button("🔍 Ask", type="primary") or question:
     else:
         with st.spinner("🔍 Searching for relevant chunks..."):
             try:
-                answer, sources, context = query_pdf_enhanced(question, top_k=top_k)
+                answer, sources, context = query_pdf_simple(question, top_k=top_k)
                 
                 # Display answer in a styled box
                 st.markdown('<div class="answer-box">', unsafe_allow_html=True)
