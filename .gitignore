@@ -1,6 +1,34 @@
-.env
-chroma_db/
-*.pyc
+# .gitignore
+# Python
 __pycache__/
-chunk_metadata.json
+*.pyc
+*.pyo
+venv/
+env/
+.venv/
+
+# API Keys & Secrets
+.env
+api_key.txt
+*.key
+*.pem
+
+# Streamlit
+.streamlit/
+chroma_db/
+*.db
+
+# RAG Data
 history.json
+chunk_metadata.json
+chunk_metadata_simple.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
