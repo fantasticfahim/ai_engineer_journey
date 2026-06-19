@@ -1,4 +1,3 @@
-# .gitignore
 # Python
 __pycache__/
 *.pyc
@@ -22,6 +21,7 @@ chroma_db/
 history.json
 chunk_metadata.json
 chunk_metadata_simple.json
+chunk_metadata_lightweight.json
 
 # IDE
 .vscode/

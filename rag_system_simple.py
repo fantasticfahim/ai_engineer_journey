@@ -7,21 +7,31 @@ from pypdf import PdfReader
 from sklearn.metrics.pairwise import cosine_similarity
 
 # Initialize the embedding model
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+# Use a try/except to handle download issues
+try:
+    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+except Exception as e:
+    print(f"Error loading model: {e}")
+    # Fallback: use a simpler model that's guaranteed to work
+    embedding_model = SentenceTransformer('paraphrase-MiniLM-L3-v2')
 
-# Global variables (in-memory storage)
+# Global variables
 chunks_with_metadata = []
 embeddings = []
 
 def load_pdf(file_path):
     """Extract text from a PDF file with page numbers"""
-    reader = PdfReader(file_path)
-    pages = []
-    for i, page in enumerate(reader.pages, 1):
-        text = page.extract_text()
-        if text and text.strip():
-            pages.append({'page': i, 'text': text})
-    return pages
+    try:
+        reader = PdfReader(file_path)
+        pages = []
+        for i, page in enumerate(reader.pages, 1):
+            text = page.extract_text()
+            if text and text.strip():
+                pages.append({'page': i, 'text': text})
+        return pages
+    except Exception as e:
+        print(f"Error loading PDF: {e}")
+        return []
 
 def chunk_text_with_metadata(pages, chunk_size=500, overlap=50):
     """Split text into chunks with metadata (page numbers)"""
@@ -63,7 +73,7 @@ def index_pdf_simple(file_path):
     # Create embeddings
     texts = [chunk['text'] for chunk in chunks_with_metadata]
     print("💾 Creating embeddings...")
-    embeddings = embedding_model.encode(texts)
+    embeddings = embedding_model.encode(texts, show_progress_bar=False)
     
     # Save metadata
     metadata_file = 'chunk_metadata_simple.json'
@@ -77,38 +87,39 @@ def query_pdf_simple(question, top_k=3):
     """Query the indexed PDF and generate an answer"""
     global chunks_with_metadata, embeddings
     
-    if not chunks_with_metadata:
+    if not chunks_with_metadata or len(embeddings) == 0:
         return "No documents indexed. Please run index_pdf_simple first.", [], ""
     
     print(f"🔍 Searching for: '{question}'")
     
-    # Get embedding for question
-    question_embedding = embedding_model.encode([question])
-    
-    # Compute similarity scores
-    similarities = cosine_similarity(question_embedding, embeddings)[0]
-    
-    # Get top_k indices
-    top_indices = similarities.argsort()[-top_k:][::-1]
-    
-    # Build context and sources
-    context_parts = []
-    sources = []
-    for i, idx in enumerate(top_indices):
-        chunk = chunks_with_metadata[idx]
-        page_num = chunk['page']
-        context_parts.append(f"[Source {i+1}, Page {page_num}]: {chunk['text']}")
-        sources.append({
-            'source_id': i+1,
-            'page': page_num,
-            'chunk_id': chunk['chunk_id'],
-            'text_preview': chunk['text'][:200] + "..." if len(chunk['text']) > 200 else chunk['text']
-        })
-    
-    context = "\n\n".join(context_parts)
-    
-    # Prepare prompt with source tracking
-    prompt = f"""Based on the following context, answer the question. Include citations to specific sources using [Source X, Page Y] format.
+    try:
+        # Get embedding for question
+        question_embedding = embedding_model.encode([question], show_progress_bar=False)
+        
+        # Compute similarity scores
+        similarities = cosine_similarity(question_embedding, embeddings)[0]
+        
+        # Get top_k indices
+        top_indices = similarities.argsort()[-top_k:][::-1]
+        
+        # Build context and sources
+        context_parts = []
+        sources = []
+        for i, idx in enumerate(top_indices):
+            chunk = chunks_with_metadata[idx]
+            page_num = chunk['page']
+            context_parts.append(f"[Source {i+1}, Page {page_num}]: {chunk['text']}")
+            sources.append({
+                'source_id': i+1,
+                'page': page_num,
+                'chunk_id': chunk['chunk_id'],
+                'text_preview': chunk['text'][:200] + "..." if len(chunk['text']) > 200 else chunk['text']
+            })
+        
+        context = "\n\n".join(context_parts)
+        
+        # Prepare prompt with source tracking
+        prompt = f"""Based on the following context, answer the question. Include citations to specific sources using [Source X, Page Y] format.
 
 Context:
 {context}
@@ -117,27 +128,34 @@ Question: {question}
 
 Answer:"""
 
-    # Call Groq API
-    from groq import Groq
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-    
-    response = client.chat.completions.create(
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant that answers questions based on the provided context. Always cite your sources using [Source X, Page Y] format."},
-            {"role": "user", "content": prompt}
-        ],
-        model="llama-3.3-70b-versatile",
-        temperature=0.3
-    )
-    
-    answer = response.choices[0].message.content
-    return answer, sources, context
+        # Call Groq API
+        from groq import Groq
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            return "Error: GROQ_API_KEY not found. Please set it in .env file or Streamlit secrets.", [], ""
+        
+        client = Groq(api_key=api_key)
+        
+        response = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that answers questions based on the provided context. Always cite your sources using [Source X, Page Y] format."},
+                {"role": "user", "content": prompt}
+            ],
+            model="llama-3.3-70b-versatile",
+            temperature=0.3
+        )
+        
+        answer = response.choices[0].message.content
+        return answer, sources, context
+        
+    except Exception as e:
+        return f"Error: {str(e)}", [], ""
 
 def main():
-    print("📚 Simple RAG Document Q&A System (No ChromaDB)")
+    print("📚 Simple RAG Document Q&A System")
     print("-" * 60)
     
     # Index the PDF
@@ -151,9 +169,10 @@ def main():
             break
         answer, sources, context = query_pdf_simple(question)
         print(f"\n📝 Answer:\n{answer}")
-        print(f"\n📖 Sources ({len(sources)} chunks):")
-        for source in sources:
-            print(f"  - Source {source['source_id']}: Page {source['page']}")
+        if sources:
+            print(f"\n📖 Sources ({len(sources)} chunks):")
+            for source in sources:
+                print(f"  - Source {source['source_id']}: Page {source['page']}")
 
 if __name__ == "__main__":
     main()

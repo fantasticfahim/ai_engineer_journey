@@ -2,13 +2,22 @@
 import streamlit as st
 import os
 import json
-from rag_system_simple import query_pdf_simple, index_pdf_simple, chunks_with_metadata as collection, embeddings
+import sys
 
 # Check if running on Streamlit Cloud
-import sys
 if 'streamlit' in sys.modules:
-    # Running on Streamlit Cloud - use secrets
-    os.environ['GROQ_API_KEY'] = st.secrets["GROQ_API_KEY"]
+    try:
+        # Running on Streamlit Cloud - use secrets
+        os.environ['GROQ_API_KEY'] = st.secrets["GROQ_API_KEY"]
+    except Exception as e:
+        st.error(f"Error loading secrets: {e}")
+
+# Import the RAG system
+try:
+    from rag_system_simple import query_pdf_simple, index_pdf_simple, chunks_with_metadata as collection, embeddings
+except ImportError as e:
+    st.error(f"Error importing RAG system: {e}")
+    st.stop()
 
 # Page configuration
 st.set_page_config(
@@ -32,13 +41,6 @@ st.markdown("""
         color: #555;
         margin-bottom: 2rem;
     }
-    .source-box {
-        background-color: #f8f9fa;
-        padding: 0.8rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-        border-left: 4px solid #2E86AB;
-    }
     .answer-box {
         background-color: #f0f7ff;
         padding: 1.5rem;
@@ -57,13 +59,11 @@ with st.sidebar:
     st.markdown("**Document:** Words & Tokens.pdf")
     
     # Show document stats
-    if collection.count() > 0:
-        st.metric("Total Chunks", collection.count())
-        if os.path.exists('chunk_metadata.json'):
-            with open('chunk_metadata.json', 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
-                pages = set(chunk['page'] for chunk in metadata)
-                st.metric("Total Pages", len(pages))
+    try:
+        if collection:
+            st.metric("Total Chunks", len(collection))
+    except:
+        pass
     
     st.markdown("---")
     st.markdown("**How it works:**")
@@ -77,9 +77,12 @@ with st.sidebar:
     st.markdown("---")
     if st.button("🔄 Re-index PDF"):
         with st.spinner("Re-indexing..."):
-            num_chunks = index_pdf_simple("Words & Tokens.pdf")
-            st.success(f"✅ Re-indexed {num_chunks} chunks!")
-            st.rerun()
+            try:
+                num_chunks = index_pdf_simple("Words & Tokens.pdf")
+                st.success(f"✅ Re-indexed {num_chunks} chunks!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error re-indexing: {e}")
 
 # Main content
 st.markdown('<p class="main-header">📚 Document Q&A with Source Tracking</p>', unsafe_allow_html=True)
@@ -121,24 +124,14 @@ if st.button("🔍 Ask", type="primary") or question:
                             st.markdown(f"**Chunk ID:** `{source['chunk_id']}`")
                             st.markdown("**Text Preview:**")
                             st.text(source['text_preview'])
-                            
-                            # If we have the full text, show it
-                            if os.path.exists('chunk_metadata.json'):
-                                with open('chunk_metadata.json', 'r', encoding='utf-8') as f:
-                                    all_metadata = json.load(f)
-                                    for chunk in all_metadata:
-                                        if chunk['chunk_id'] == source['chunk_id']:
-                                            st.markdown("**Full Chunk Text:**")
-                                            st.text_area("Full Text", chunk['text'], height=150, key=f"full_{i}", label_visibility="collapsed")
-                                            break
                 
                 # Show retrieved context (for debugging, optional)
                 with st.expander("🔍 Retrieved Context (Raw)"):
-                    st.text_area("Context", context, height=200)
+                    st.text_area("Context", context, height=200, key="context_display")
                     
             except Exception as e:
                 st.error(f"❌ Error: {e}")
 
 # Footer
 st.markdown("---")
-st.caption("Built with ❤️ using Streamlit, ChromaDB, and Groq")
+st.caption("Built with ❤️ using Streamlit, and Groq")
