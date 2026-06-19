@@ -28,6 +28,7 @@ dependencies = [
     "groq",
     "python-dotenv",
     "scikit-learn",
+    "pandas",
 ]
 
 [project.urls]
