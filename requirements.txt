@@ -8,3 +8,5 @@ pandas
 pytest
 black
 isort
+torch
+transformers

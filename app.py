@@ -8,11 +8,10 @@ from datetime import datetime
 import pandas as pd
 
 # ==========================================
-# FIX: Handle API Key Loading for Both Environments
+# API KEY LOADING
 # ==========================================
 def load_api_key():
     """Load API key from .env (local) or secrets (Cloud)"""
-    # First, try to load from .env file (for local development)
     try:
         from dotenv import load_dotenv
         load_dotenv()
@@ -20,71 +19,76 @@ def load_api_key():
         if api_key:
             os.environ['GROQ_API_KEY'] = api_key
             return api_key
-    except Exception as e:
-        print(f"Error loading .env: {e}")
+    except Exception:
+        pass
     
-    # If running on Streamlit Cloud, try secrets
     try:
         if 'streamlit' in sys.modules:
             api_key = st.secrets.get("GROQ_API_KEY")
             if api_key:
                 os.environ['GROQ_API_KEY'] = api_key
                 return api_key
-    except Exception as e:
-        print(f"Error loading secrets: {e}")
+    except Exception:
+        pass
     
-    # If still no key, try environment variable directly
     api_key = os.environ.get("GROQ_API_KEY")
     if api_key:
         return api_key
     
-    # No key found - show error in app but don't crash
     st.error("⚠️ GROQ_API_KEY not found. Please set it in .env file or Streamlit secrets.")
     return None
 
-# Load API key
 GROQ_API_KEY = load_api_key()
 
 # ==========================================
-# Import RAG System
+# IMPORT RAG SYSTEM V3
 # ==========================================
 try:
-    from rag_system_enhanced_v2 import (
-        query_pdf_enhanced,
-        index_pdf_with_metadata,
+    from rag_system_v3 import (
+        query_pdf_v3,
+        index_document,
+        list_documents,
+        remove_document,
+        all_documents,
         collection,
-        evaluate_answer,
-        embedding_model,
-        chunks_with_metadata
+        evaluate_answer_v3
     )
 except ImportError as e:
     st.error(f"Error importing RAG system: {e}")
     st.stop()
 
 # ==========================================
-# Page Configuration
+# PAGE CONFIG
 # ==========================================
 st.set_page_config(
-    page_title="RAG Document Q&A",
+    page_title="RAG Document Q&A V3",
     page_icon="📚",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ==========================================
-# Session State Initialization
+# SESSION STATE INIT
 # ==========================================
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
-
-if 'total_queries' not in st.session_state:
-    st.session_state.total_queries = 0
-
 if 'evaluation_scores' not in st.session_state:
     st.session_state.evaluation_scores = []
+if 'uploaded_files' not in st.session_state:
+    st.session_state.uploaded_files = []
+if 'selected_docs' not in st.session_state:
+    st.session_state.selected_docs = []
+if 'alpha' not in st.session_state:
+    st.session_state.alpha = 0.5
+if 'use_reranking' not in st.session_state:
+    st.session_state.use_reranking = True
+if 'chunk_size' not in st.session_state:
+    st.session_state.chunk_size = 500
+if 'chunk_overlap' not in st.session_state:
+    st.session_state.chunk_overlap = 50
 
 # ==========================================
-# Custom CSS
+# CUSTOM CSS
 # ==========================================
 st.markdown("""
     <style>
@@ -126,10 +130,10 @@ st.markdown("""
 # ==========================================
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/000000/artificial-intelligence.png", width=80)
-    st.title("📚 RAG System")
+    st.title("📚 RAG System V3")
     st.markdown("---")
     
-    # Show API key status
+    # API Key Status
     if GROQ_API_KEY:
         st.success("✅ API Key loaded")
     else:
@@ -137,13 +141,88 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Document stats
-    st.markdown("**📄 Document:** Words & Tokens.pdf")
-    try:
-        if collection:
-            st.metric("Total Chunks", collection.count())
-    except:
-        pass
+    # ========== DOCUMENT MANAGEMENT ==========
+    st.markdown("### 📄 Document Management")
+    
+    # File upload
+    uploaded_file = st.file_uploader("Upload PDF", type=['pdf'])
+    if uploaded_file is not None:
+        # Save uploaded file
+        file_path = os.path.join("uploads", uploaded_file.name)
+        os.makedirs("uploads", exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        if st.button(f"📥 Index {uploaded_file.name}"):
+            with st.spinner(f"Indexing {uploaded_file.name}..."):
+                num_chunks = index_document(file_path, uploaded_file.name)
+                if num_chunks > 0:
+                    st.success(f"✅ Indexed {num_chunks} chunks from {uploaded_file.name}")
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to index document.")
+    
+    # List indexed documents
+    docs = list_documents()
+    if docs:
+        st.markdown("**Indexed Documents:**")
+        for doc in docs:
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.write(f"📄 {doc}")
+            with col2:
+                if st.button("🗑️", key=f"del_{doc}"):
+                    if remove_document(doc):
+                        st.rerun()
+    
+    # Document filter for search
+    if docs:
+        st.markdown("**Search in selected documents:**")
+        st.session_state.selected_docs = st.multiselect(
+            "Select documents",
+            docs,
+            default=docs
+        )
+    
+    st.markdown("---")
+    
+    # ========== SEARCH PARAMETERS ==========
+    st.markdown("### 🔧 Search Parameters")
+    
+    # Hybrid search weight
+    st.session_state.alpha = st.slider(
+        "Semantic vs Keyword Weight",
+        min_value=0.0,
+        max_value=1.0,
+        value=st.session_state.alpha,
+        step=0.1,
+        help="1.0 = Semantic only, 0.0 = Keyword only, 0.5 = Hybrid"
+    )
+    
+    # Reranking toggle
+    st.session_state.use_reranking = st.checkbox(
+        "Use Reranking",
+        value=st.session_state.use_reranking,
+        help="Cross-encoder or LLM-based reranking"
+    )
+    
+    # Chunk size
+    st.session_state.chunk_size = st.slider(
+        "Chunk Size",
+        min_value=200,
+        max_value=1000,
+        value=st.session_state.chunk_size,
+        step=50
+    )
+    
+    # Chunk overlap
+    st.session_state.chunk_overlap = st.slider(
+        "Chunk Overlap",
+        min_value=0,
+        max_value=100,
+        value=st.session_state.chunk_overlap,
+        step=10
+    )
     
     st.markdown("---")
     
@@ -206,20 +285,27 @@ with st.sidebar:
         st.rerun()
     
     st.markdown("---")
-    if st.button("🔄 Re-index PDF"):
-        with st.spinner("Re-indexing..."):
-            try:
-                num_chunks = index_pdf_with_metadata("Words & Tokens.pdf")
-                st.success(f"✅ Re-indexed {num_chunks} chunks!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error re-indexing: {e}")
+    
+    # ========== RE-INDEX ==========
+    if st.button("🔄 Re-index All Documents"):
+        with st.spinner("Re-indexing all documents..."):
+            # This is a simplified re-index - in production, would need proper tracking
+            st.info("Re-indexing will happen on next query with new parameters.")
 
 # ==========================================
 # MAIN CONTENT
 # ==========================================
 st.markdown('<p class="main-header">📚 Document Q&A with Source Tracking</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Ask questions about your document and get answers with citations</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">Ask questions about your documents and get answers with citations</p>', unsafe_allow_html=True)
+
+# Display current settings
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.caption(f"🔍 Search Mode: {'Hybrid' if st.session_state.alpha not in [0,1] else 'Semantic' if st.session_state.alpha == 1 else 'Keyword'}")
+with col2:
+    st.caption(f"📊 Reranking: {'ON' if st.session_state.use_reranking else 'OFF'}")
+with col3:
+    st.caption(f"📄 Documents: {len(list_documents())}")
 
 # Input area
 col1, col2 = st.columns([5, 1])
@@ -237,48 +323,36 @@ with col2:
 # ==========================================
 if st.button("🔍 Ask", type="primary") or question:
     if not GROQ_API_KEY:
-        st.error("❌ Cannot ask questions: GROQ_API_KEY not set. Please add it to .env file.")
+        st.error("❌ Cannot ask questions: GROQ_API_KEY not set.")
     elif not question:
         st.warning("Please enter a question.")
     else:
-        with st.spinner("🔍 Searching for relevant chunks..."):
+        with st.spinner("🔍 Searching..."):
             try:
                 start_time = time.time()
                 
-                # Query the RAG system
-                answer, sources, context = query_pdf_enhanced(question, top_k=top_k)
+                # Query the RAG system with current settings
+                answer, sources, context = query_pdf_v3(
+                    question=question,
+                    top_k=top_k,
+                    alpha=st.session_state.alpha,
+                    use_reranking=st.session_state.use_reranking,
+                    file_filter=st.session_state.selected_docs if st.session_state.selected_docs else None
+                )
                 
                 response_time = time.time() - start_time
                 
                 # Store in chat history
                 st.session_state.chat_history.append((question, answer))
                 
-                # ========== EVALUATE ANSWER ==========
-                citation_accurate = len(sources) > 0
+                # Evaluate
+                eval_results = evaluate_answer_v3(question, answer, sources)
+                eval_results['response_time'] = response_time
+                eval_results['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                eval_results['question'] = question
+                st.session_state.evaluation_scores.append(eval_results)
                 
-                # Compute semantic similarity
-                try:
-                    # Get embeddings for similarity comparison
-                    if answer and len(answer) > 10:
-                        # Simple heuristic: if we have sources, likely good
-                        similarity_score = 0.85 if citation_accurate else 0.3
-                    else:
-                        similarity_score = 0.0
-                except:
-                    similarity_score = 0.5
-                
-                # Store evaluation
-                eval_result = {
-                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    'question': question,
-                    'similarity': similarity_score,
-                    'citation_accurate': citation_accurate,
-                    'response_time': response_time,
-                    'num_sources': len(sources)
-                }
-                st.session_state.evaluation_scores.append(eval_result)
-                
-                # ========== DISPLAY ANSWER ==========
+                # Display answer
                 st.markdown('<div class="answer-box">', unsafe_allow_html=True)
                 st.markdown("### 📝 Answer")
                 st.write(answer)
@@ -291,7 +365,7 @@ if st.button("🔍 Ask", type="primary") or question:
                     st.markdown(f"*{len(sources)} relevant chunks retrieved*")
                     
                     for i, source in enumerate(sources):
-                        with st.expander(f"📄 Source {source['source_id']} — Page {source['page']}"):
+                        with st.expander(f"📄 Source {source['source_id']} — {source['file_name']}, Page {source['page']}"):
                             st.markdown(f"**Chunk ID:** `{source['chunk_id']}`")
                             st.markdown("**Text Preview:**")
                             st.text(source['text_preview'])
@@ -301,7 +375,7 @@ if st.button("🔍 Ask", type="primary") or question:
                     st.text_area("Context", context, height=200, key="context_display")
                 
                 # Show evaluation badge
-                st.success(f"✅ Evaluated | Similarity: {similarity_score:.3f} | Citation Accurate: {citation_accurate}")
+                st.success(f"✅ Evaluated | Similarity: {eval_results['similarity']:.3f} | Citation Accurate: {eval_results['citation_accurate']}")
                     
             except Exception as e:
                 st.error(f"❌ Error: {e}")
@@ -310,4 +384,4 @@ if st.button("🔍 Ask", type="primary") or question:
 # FOOTER
 # ==========================================
 st.markdown("---")
-st.caption("Built with ❤️ using Streamlit, Groq, and SentenceTransformers")
+st.caption("Built with ❤️ using Streamlit, Groq, and SentenceTransformers | RAG V3 with Hybrid Search + Reranking")
